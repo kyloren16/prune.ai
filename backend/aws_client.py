@@ -39,21 +39,23 @@ def verify_role_arn(role_arn: str):
 def stop_instance(instance_id: str, role_arn: str):
     """Stops an EC2 instance to remediate the anomaly (Manual Resolution)."""
     try:
-        session = _get_assumed_role_session(role_arn)
-        ec2_client = session.client('ec2')
+        ec2_client = boto3.client('ec2', region_name=region)
         response = ec2_client.stop_instances(InstanceIds=[instance_id])
-        return {"status": "success", "response": response}
+        print(f"[AWS-ACTION] stop_instances({instance_id}): SUCCESS")
+        return {"status": "success", "instance_id": instance_id, "action": "stopped"}
     except Exception as e:
+        print(f"[AWS-ACTION] stop_instances({instance_id}): FAILED - {e}")
         return {"status": "error", "message": str(e)}
 
 def restart_instance(instance_id: str, role_arn: str):
     """Starts a stopped EC2 instance to undo remediation."""
     try:
-        session = _get_assumed_role_session(role_arn)
-        ec2_client = session.client('ec2')
+        ec2_client = boto3.client('ec2', region_name=region)
         response = ec2_client.start_instances(InstanceIds=[instance_id])
-        return {"status": "success", "response": response}
+        print(f"[AWS-ACTION] start_instances({instance_id}): SUCCESS")
+        return {"status": "success", "instance_id": instance_id, "action": "started"}
     except Exception as e:
+        print(f"[AWS-ACTION] start_instances({instance_id}): FAILED - {e}")
         return {"status": "error", "message": str(e)}
 
 def add_to_snooze_registry(instance_id: str):

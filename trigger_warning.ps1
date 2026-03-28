@@ -17,6 +17,12 @@ $Body = @{
         network_in_bytes = 450000000
         hourly_spend = 2.85
     }
+    narrative = @{
+        who = "CloudWatch / PruneAI Agent"
+        what = "Unusual CPU Credit depletion detected on $InstanceId"
+        why = "Baseline drift detected. Potential for performance degradation if sustained."
+        action = "Manual Review Recommended. High risk of noisy neighbor influence."
+    }
 } | ConvertTo-Json
 
 Invoke-RestMethod -Uri "http://34.201.22.230:8000/api/alert" -Method Post -Body $Body -ContentType "application/json"
