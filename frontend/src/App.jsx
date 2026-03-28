@@ -546,6 +546,17 @@ export default function App() {
 
       if (data.suspicion_score >= 0.8) {
         setStatus('critical');
+        addLog(`Auto-Remediation Executed: Instance ${data.instance_id} stopped.`);
+        // Auto-reset dashboard after remediation completes (~5 seconds)
+        setTimeout(() => {
+          setScore(0.05);
+          setStatus('healthy');
+          setNarrative(null);
+          setHasAlert(false);
+          setHistoryData(generateHistory(0.05));
+          addLog('✅ Remediation complete. System restored to optimal state.');
+          fetchHistory();
+        }, 5000);
       } else if (data.suspicion_score >= 0.6) {
         setStatus('warning');
       } else {
