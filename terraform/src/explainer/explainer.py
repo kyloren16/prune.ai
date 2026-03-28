@@ -1,106 +1,107 @@
-import json
 import os
-import urllib.request
-import urllib.error
+import json
 import boto3
-from botocore.exceptions import ClientError
+import requests
+from mock_data import get_mock_cloudtrail_logs
+from google import genai
+from google.genai import types
 
-def check_backend_active(url):
-    """Check if the primary FastAPI backend (WebSocket server) is active."""
-    try:
-        req = urllib.request.Request(url, method='GET')
-        with urllib.request.urlopen(req, timeout=3) as response:
-            return response.status == 200
-    except (urllib.error.URLError, Exception) as e:
-        print(f"Backend check failed: {e}")
-        return False
-
-def send_alert_email(issue_x, dep_n, dep_xyz, resolve_url, recipient_email):
-    """Sends a formatted email using AWS SES."""
-    ses_client = boto3.client('ses', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
-    sender = os.environ.get('SENDER_EMAIL', 'alert@prune.ai')
-    
-    html_content = f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #1a2024; padding: 40px 20px; color: #f2f0dc;">
-        <div style="max-width: 600px; margin: 0 auto; background-color: #27313b; border-radius: 8px; border-top: 4px solid #43927d; box-shadow: 0 4px 15px rgba(0,0,0,0.3); overflow: hidden;">
-            <div style="text-align: center; padding: 30px 20px 10px;">
-                <!-- Assuming logo is hosted here -->
-                <img src="https://prune.ai/logo.png" alt="prune.ai logo" style="max-width: 140px; height: auto;">
-            </div>
-            <div style="padding: 20px 40px 40px;">
-                <h2 style="color: #8B0000; font-size: 24px; font-weight: 600; margin-top: 0; margin-bottom: 20px; border-bottom: 1px solid #374354; padding-bottom: 15px;">
-                    Urgent Action Required
-                </h2>
-                <p style="font-size: 16px; line-height: 1.6; color: #d8d8d8; margin: 0;">
-                    <strong style="color: #f2f0dc;">{issue_x}</strong> issue has risen and is causing <strong style="color: #f2f0dc;">{dep_n}</strong> <strong style="color: #f2f0dc;">{dep_xyz}</strong> dependencies.
-                </p>
-                <div style="text-align: center; margin-top: 35px;">
-                    <a href="{resolve_url}" style="background-color: #43927d; color: #f2f0dc; text-decoration: none; padding: 14px 28px; border-radius: 4px; font-weight: 600; font-size: 16px; display: inline-block;">Click here to resolve or view more</a>
-                </div>
-                <div style="margin-top: 40px; font-size: 14px; color: #8c9ba5;">
-                    Best regards,<br>
-                    <span style="font-weight: 600; color: #43927d;">prune.ai Team</span>
-                </div>
-            </div>
-        </div>
-    </div>
-    """
+def generate_ai_narrative(event_payload, logs):
+    """Uses Gemini 2.0 Flash to synthesize the metrics and logs into a human-readable narrative."""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key or api_key == "your_gemini_api_key":
+        print("[AI-MOCK] Missing valid GEMINI_API_KEY. Using mock narrative.")
+        return json.dumps({
+            "title": "Unexplained Resource Upscale",
+            "who": "dev-user-bob",
+            "what": "Modified instance attribute to an expensive p3.8xlarge.",
+            "why": "No specific Jira ticket referenced in tags. Likely a manual experimentation test."
+        })
 
     try:
-        response = ses_client.send_email(
-            Destination={'ToAddresses': [recipient_email]},
-            Message={
-                'Body': {
-                    'Html': {'Charset': 'UTF-8', 'Data': html_content},
-                    'Text': {'Charset': 'UTF-8', 'Data': f"Urgent Action Required\n\n{issue_x} issue has risen and is causing {dep_n} {dep_xyz} dependencies.\n\nClick here to resolve or view more: {resolve_url}\n\nprune.ai Team"}
-                },
-                'Subject': {'Charset': 'UTF-8', 'Data': f"Urgent: {issue_x} Issue Detected"}
-            },
-            Source=sender
+        client = genai.Client(api_key=api_key)
+        prompt = f"""
+        You are Cloudscope AIOps, a world-class AWS security and cost optimization AI.
+        Analyze the following anomaly event and CloudTrail logs.
+        Generate a structured JSON report explaining the Who, What, and Why of this cost spike.
+        Keep it brief but technically accurate.
+        
+        Anomaly Event: {json.dumps(event_payload)}
+        CloudTrail Logs: {json.dumps(logs)}
+        
+        Strictly format your response as valid JSON with keys: "title", "who", "what", "why".
+        """
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config={"response_mime_type": "application/json"}
         )
-        print(f"Email sent successfully. Message ID: {response['MessageId']}")
-    except ClientError as e:
-        print(f"Failed to send email: {e.response['Error']['Message']}")
+        return response.text
+    except Exception as e:
+         print(f"[AI-ERROR] Gemini API failed: {e}")
+         return "{}"
+
+def auto_remediate(instance_id):
+    """Mock Boto3 remediation."""
+    print(f"[AWS-BOTO3] [STOP] Auto-remediation triggered. Stopping instance: {instance_id}")
+    # client = boto3.client('ec2')
+    # client.stop_instances(InstanceIds=[instance_id])
+
+def publish_to_dashboard(narrative_json, event_payload):
+    """Mock pushing JSON to FastAPI the delivery websocket."""
+    # Parse the narrative string into a dict to match AlertPayload
+    try:
+        narrative_dict = json.loads(narrative_json)
+    except Exception:
+        narrative_dict = {"raw": narrative_json}
+
+    # Build payload to match AlertPayload BaseModel in main.py
+    payload = {
+        "role_arn": event_payload.get('role_arn', "arn:aws:iam::123456789012:role/demo"),
+        "instance_id": event_payload.get('instance_id', 'unknown'),
+        "suspicion_score": event_payload.get('suspicion_score', 0.0),
+        "narrative": narrative_dict,
+        "metrics": event_payload.get('metrics', {})
+    }
+    print("\n[FASTAPI-WEBHOOK] Pushing narrative to Dashboard internally via HTTP POST...")
+    try:
+        resp = requests.post("http://127.0.0.1:8000/api/alert", json=payload)
+        if resp.status_code == 200:
+             print("[FASTAPI-WEBHOOK] Broadcast successful.")
+        else:
+             print(f"[FASTAPI-WEBHOOK] Failed gracefully. Server returned {resp.status_code}.")
+    except Exception as e:
+        print(f"[FASTAPI-WEBHOOK] Failed to reach Dashboard. Is FastAPI running? error: {e}")
 
 def lambda_handler(event, context):
-    print("CloudScope Explainer Triggered")
+    """AWS Lambda entry point for the Explainer (triggered by SNS)."""
     
-    # 1. Check if backend is active
-    backend_url = os.environ.get('BACKEND_URL', 'http://127.0.0.1:8000/api/health')
-    is_active = check_backend_active(backend_url)
-    
-    if not is_active:
-        print("Backend is inactive. Switching to email notification flow.")
-        
-        # 2. Hit up email service with JSON file (parsed from event)
-        payload = event
-        if 'Records' in event and len(event['Records']) > 0 and 'Sns' in event['Records'][0]:
-            try:
-                payload = json.loads(event['Records'][0]['Sns']['Message'])
-            except json.JSONDecodeError:
-                pass
-                
-        # Extract x, n, xyz values
-        x_issue = payload.get('issue_x', 'Critical System')
-        n_count = payload.get('n', 'multiple')
-        xyz_deps = payload.get('xyz', 'downstream')
-        recipient_email = payload.get('user_email', os.environ.get('ADMIN_EMAIL', 'admin@prune.ai'))
-        
-        # 3. Create resolution hyperlink
-        base_website_url = os.environ.get('WEBSITE_URL', 'https://prune.ai/resolve')
-        incident_id = payload.get('incident_id', 'unknown')
-        resolve_url = f"{base_website_url}?incident={incident_id}"
-        
-        # 4. Email the user
-        send_alert_email(x_issue, n_count, xyz_deps, resolve_url, recipient_email)
-        
-        return {
-            'statusCode': 200,
-            'body': json.dumps({'message': 'Backend inactive. Fallback email dispatched.'})
-        }
-    
-    # Normal flow if backend is active
-    return {
-        'statusCode': 200,
-        'body': json.dumps({'message': 'Explainer executed and pushed to active backend.'})
+    # In reality, event comes from SNS: event['Records'][0]['Sns']['Message']
+    # If run directly as mock:
+    event_payload = event if event else {
+        "instance_id": "i-1234567890abcdef0",
+        "suspicion_score": 0.85,
+        "metrics": {"cpu": 95, "spend": 5.0}
     }
+    
+    instance_id = event_payload.get('instance_id')
+    score = event_payload.get('suspicion_score', 0)
+    print(f"[EXPLAINER] Processing anomaly for {instance_id} (Score: {score})")
+
+    # 3. Narrative Stage
+    # Perform CloudTrail lookup
+    logs = get_mock_cloudtrail_logs()
+    
+    # Pass structured bundle to Gemini 2.0 Flash
+    narrative_json = generate_ai_narrative(event_payload, logs)
+    
+    # 4. Delivery Stage
+    publish_to_dashboard(narrative_json, event_payload)
+
+    # 5. Remediation Stage block
+    if score >= 0.80:
+        auto_remediate(instance_id)
+
+if __name__ == '__main__':
+    # Local test execution
+    lambda_handler(None, None)
