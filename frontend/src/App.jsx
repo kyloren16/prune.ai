@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Shield, CheckCircle, RotateCcw, AlertTriangle, Zap, Server, Activity as Pulse, LogOut } from 'lucide-react';
+import {
+  Activity, Shield, Zap, RefreshCw, AlertTriangle, Monitor,
+  Server, Globe, Database, Clock, Terminal, CheckCircle, RotateCcw,
+  ChevronRight, Pulse, Cpu, TrendingUp
+} from 'lucide-react';
 import HealthGauge from './components/HealthGauge';
 import Login from './components/Login';
 import './index.css';
@@ -13,10 +17,27 @@ function App() {
   const [narrative, setNarrative] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [logs, setLogs] = useState([]);
+  const [history, setHistory] = useState([]);
 
   const addLog = (msg) => {
     setLogs(prev => [...prev.slice(-4), { time: new Date().toLocaleTimeString(), msg }]);
   };
+
+  const fetchHistory = async () => {
+    if (!authSession) return;
+    try {
+      const backendUrl = import.meta.env.VITE_APP_BACKEND_URL || 'http://localhost:8000';
+      const resp = await fetch(`${backendUrl}/api/history?role_arn=${encodeURIComponent(authSession.role_arn)}`);
+      const data = await resp.json();
+      setHistory(data);
+    } catch (err) {
+      console.error("Failed to fetch history:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (authSession) fetchHistory();
+  }, [authSession]);
 
   useEffect(() => {
     // Only start dashboard if authenticated
@@ -39,8 +60,13 @@ function App() {
       const data = JSON.parse(event.data);
       addLog(`INCOMING ALERT: Suspicion Score ${data.suspicion_score}`);
 
-      setScore(data.suspicion_score);
-      setNarrative(data.narrative);
+      if (data.narrative) {
+        setNarrative(data.narrative);
+        setScore(data.suspicion_score);
+        setStatus('anomaly');
+        addLog(`Incoming Anomaly Detected: ${data.instance_id}`);
+        fetchHistory();
+      }
 
       if (data.suspicion_score >= 0.8) {
         setStatus('critical');
@@ -234,6 +260,55 @@ function App() {
               </div>
             )}
           </div>
+
+          {/* Historical Audit Trail */}
+          {history.length > 0 && (
+            <div className="glass-card slide-in" style={{ marginTop: '2rem', width: '100%', maxWidth: '800px', padding: '1.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                <Clock size={20} color="var(--brand-teal-light)" />
+                <h3 style={{ fontSize: '1rem', fontWeight: '600' }}>📜 Historical Audit Trail (TimescaleDB)</h3>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--glass-border)', textAlign: 'left', color: 'var(--text-secondary)' }}>
+                      <th style={{ padding: '0.75rem' }}>Timestamp</th>
+                      <th style={{ padding: '0.75rem' }}>Instance</th>
+                      <th style={{ padding: '0.75rem' }}>CPU%</th>
+                      <th style={{ padding: '0.75rem' }}>Score</th>
+                      <th style={{ padding: '0.75rem' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((row, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <td style={{ padding: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                          {new Date(row.time).toLocaleString()}
+                        </td>
+                        <td style={{ padding: '0.75rem', fontWeight: 500 }}>{row.instance_id.slice(0, 10)}...</td>
+                        <td style={{ padding: '0.75rem' }}>{row.cpu?.toFixed(1)}%</td>
+                        <td style={{ padding: '0.75rem', fontWeight: 600, color: row.score >= 0.8 ? 'var(--accent-red)' : 'var(--accent-orange)' }}>
+                          {row.score.toFixed(2)}
+                        </td>
+                        <td style={{ padding: '0.75rem' }}>
+                          <span style={{
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '4px',
+                            fontSize: '0.7rem',
+                            background: row.score >= 0.6 ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.1)',
+                            color: row.score >= 0.6 ? 'var(--accent-red)' : '#22c55e',
+                            border: `1px solid ${row.score >= 0.6 ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.2)'}`
+                          }}>
+                            {row.score >= 0.8 ? 'Critical' : row.score >= 0.6 ? 'Warning' : 'Nominal'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

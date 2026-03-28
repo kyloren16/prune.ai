@@ -148,7 +148,7 @@ def lambda_handler(event, context):
     full_payload = {
         **event_payload,
         "narrative": narrative,
-        "role_arn": "arn:aws:iam::008533941157:role/PruneAI_CrossAccount_Role"
+        "role_arn": event_payload.get("role_arn", "arn:aws:iam::008533941157:role/PruneAI_CrossAccount_Role")
     }
     publish_to_dashboard(full_payload)
     

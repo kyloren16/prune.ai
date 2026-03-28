@@ -1,7 +1,25 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from datetime import datetime
+
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import aws_client
+import os
+import psycopg2
+from dotenv import load_dotenv
+
+# Load production .env
+load_dotenv()
+
+# Database Connection Helper
+def get_db_connection():
+    return psycopg2.connect(
+        host=os.environ.get("DB_HOST"),
+        port=os.environ.get("DB_PORT", 5432),
+        user=os.environ.get("DB_USER"),
+        password=os.environ.get("DB_PASSWORD"),
+        database=os.environ.get("DB_NAME", "postgres")
+    )
 
 app = FastAPI(title="CloudScope AIOps Delivery Layer")
 
@@ -89,8 +107,41 @@ async def register_aws_account(payload: AuthPayload):
 @app.post("/api/alert")
 async def receive_explainer_alert(alert: AlertPayload):
     """Hidden endpoint called by the Explainer Lambda to push Gemini Narrative to a specific user."""
+    # 1. Persist to TimescaleDB
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO metrics_history (
+                time, instance_id, cpu_usage_percent, memory_usage_percent, 
+                network_in_bytes, hourly_spend, suspicion_score, is_anomaly, role_arn
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            """,
+            (
+                datetime.utcnow(),
+                alert.instance_id,
+                alert.metrics.get("cpu_usage_percent"),
+                alert.metrics.get("memory_usage_percent"),
+                alert.metrics.get("network_in_bytes"),
+                alert.metrics.get("hourly_spend"),
+                alert.suspicion_score,
+                alert.suspicion_score >= 0.6,
+                alert.role_arn
+            )
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"[DB-SYNC] Persisted alert for {alert.instance_id}")
+    except Exception as e:
+        print(f"[DB-ERROR] Failed to persist alert: {e}")
+
+    # 2. Broadcast to Dashboard
     await manager.broadcast_alert(alert.role_arn, alert.model_dump())
-    return {"status": "alert_broadcast_successful", "delivered_to": alert.role_arn}
+    return {"status": "alert_broadcast_and_persisted", "delivered_to": alert.role_arn}
 
 @app.post("/api/rollback")
 async def trigger_rollback(payload: RollbackPayload):
@@ -103,6 +154,36 @@ async def trigger_rollback(payload: RollbackPayload):
         "restart": restart_resp,
         "snooze": snooze_resp
     }
+
+@app.get("/api/history")
+async def get_anomaly_history(role_arn: str):
+    """Fetches the last 10 anomaly records from TimescaleDB scoped to a specific Role ARN."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT time, instance_id, cpu_usage_percent, memory_usage_percent, suspicion_score, is_anomaly FROM metrics_history WHERE role_arn = %s ORDER BY time DESC LIMIT 10",
+            (role_arn,)
+        )
+        rows = cur.fetchall()
+        
+        history = []
+        for row in rows:
+            history.append({
+                "time": row[0].isoformat() if row[0] else None,
+                "instance_id": row[1],
+                "cpu": row[2],
+                "mem": row[3],
+                "score": row[4],
+                "is_anomaly": row[5]
+            })
+        
+        cur.close()
+        conn.close()
+        return history
+    except Exception as e:
+        print(f"[DB-ERROR] History Fetch Failed: {e}")
+        return []
 
 # --- WebSockets ---
 

@@ -63,7 +63,8 @@ def lambda_handler(event, context):
             "instance_id": instance_id,
             "suspicion_score": score,
             "metrics": {**vitals, **spend},
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
+            "role_arn": os.environ.get("TARGET_ROLE_ARN", "arn:aws:iam::008533941157:role/PruneAI_CrossAccount_Role")
         }
         publish_to_sns(event_payload)
     
