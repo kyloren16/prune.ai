@@ -4,10 +4,13 @@ import psycopg2
 from dotenv import load_dotenv
 from datetime import datetime
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), 'lambdas'))
+# Fix paths for new repository structure (Lambdas moved to terraform/src)
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'terraform', 'src', 'detector')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'terraform', 'src', 'explainer')))
+
 from mock_data import get_mock_cloudwatch_vitals, get_mock_cost_explorer_spend, get_mock_cloudtrail_logs
 from detector import calculate_suspicion_score, generate_historical_baseline, save_to_timescaledb
-from explainer import generate_ai_narrative, auto_remediate, publish_to_dashboard
+from explainer import generate_ai_narrative, auto_remediate, publish_to_dashboard_or_email as publish_to_dashboard
 
 load_dotenv()
 
