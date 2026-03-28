@@ -575,7 +575,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           role_arn: authSession.token,
-          instance_id: 'i-0abcd1234efgh5678'
+          instance_id: 'i-0abcd1234efgh5678',
+          score: score
         }),
       });
 

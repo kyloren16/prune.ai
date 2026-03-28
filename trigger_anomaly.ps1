@@ -1,22 +1,25 @@
 # trigger_anomaly.ps1
-# Run this script to trigger a live anomaly in your CloudScope AIOps dashboard
+param(
+    [string]$InstanceId = "i-0abcd1234efgh5678"
+)
 
-Write-Host "⚡ Triggering CloudScope AIOps Anomaly Pipeline..." -ForegroundColor Yellow
+$RoleArn = "arn:aws:iam::008533941157:role/PruneAI_CrossAccount_Role"
 
-$aws_path = "C:\Program Files\Amazon\AWSCLIV2\aws.exe"
+Write-Host "`n⚡ Triggering CloudScope AIOps CRITICAL Anomaly..." -ForegroundColor Red
 
-if (!(Test-Path $aws_path)) {
-    $aws_path = "aws" # Fallback to PATH
-}
+$Body = @{
+    role_arn = $RoleArn
+    instance_id = $InstanceId
+    suspicion_score = 0.93
+    metrics = @{
+        cpu_usage_percent = 92.5
+        memory_usage_percent = 88.2
+        network_in_bytes = 1500000000
+        hourly_spend = 12.85
+    }
+} | ConvertTo-Json
 
-& $aws_path lambda invoke --function-name CloudScope-Detector --region us-east-1 response.json | Out-Null
+Invoke-RestMethod -Uri "http://34.201.22.230:8000/api/alert" -Method Post -Body $Body -ContentType "application/json"
 
-if ($LASTEXITCODE -eq 0) {
-    $response = Get-Content response.json | ConvertFrom-Json
-    Write-Host "✅ Anomaly Triggered! Suspicion Score: $($response.score)" -ForegroundColor Green
-    Write-Host "Check your dashboard now!" -ForegroundColor Cyan
-} else {
-    Write-Host "❌ Failed to trigger anomaly. Check AWS credentials." -ForegroundColor Red
-}
-
-Remove-Item response.json -ErrorAction SilentlyContinue
+Write-Host "`n✅ Anomaly Triggered! Suspicion Score: 0.93" -ForegroundColor Green
+Write-Host "Look for the 'Undo Remediation' button on your dashboard!`n"

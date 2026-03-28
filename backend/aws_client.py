@@ -36,8 +36,18 @@ def verify_role_arn(role_arn: str):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+def stop_instance(instance_id: str, role_arn: str):
+    """Stops an EC2 instance to remediate the anomaly (Manual Resolution)."""
+    try:
+        session = _get_assumed_role_session(role_arn)
+        ec2_client = session.client('ec2')
+        response = ec2_client.stop_instances(InstanceIds=[instance_id])
+        return {"status": "success", "response": response}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 def restart_instance(instance_id: str, role_arn: str):
-    """Restarts a stopped EC2 instance to remediate the anomaly in the User's explicit AWS Account."""
+    """Starts a stopped EC2 instance to undo remediation."""
     try:
         session = _get_assumed_role_session(role_arn)
         ec2_client = session.client('ec2')

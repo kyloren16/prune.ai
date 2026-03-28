@@ -1,8 +1,9 @@
 # trigger_warning.ps1
-# Specifically triggers a "Warning" state (Score ~0.72) to test Manual Resolution
+param(
+    [string]$InstanceId = "i-0abcd1234efgh5678"
+)
 
 $RoleArn = "arn:aws:iam::008533941157:role/PruneAI_CrossAccount_Role"
-$InstanceId = "i-0abcd1234efgh5678"
 
 Write-Host "`n⚡ Triggering CloudScope AIOps WARNING Pipeline..." -ForegroundColor Yellow
 
@@ -15,12 +16,6 @@ $Body = @{
         memory_usage_percent = 64.2
         network_in_bytes = 450000000
         hourly_spend = 2.85
-    }
-    narrative = @{
-        who = "CloudWatch Alarms"
-        what = "Unusual CPU Credit depletion detected on t3.micro."
-        why = "Baseline drift detected. Potential for performance degradation if sustained."
-        action = "Manual Review Recommended. High risk of noisy neighbor influence."
     }
 } | ConvertTo-Json
 

@@ -144,14 +144,24 @@ async def receive_explainer_alert(alert: AlertPayload):
     return {"status": "alert_broadcast_and_persisted", "delivered_to": alert.role_arn}
 
 @app.post("/api/rollback")
-async def trigger_rollback(payload: RollbackPayload):
-    """Triggered when user clicks 'Undo' on React dashboard."""
-    restart_resp = aws_client.restart_instance(payload.instance_id, payload.role_arn)
-    snooze_resp = aws_client.add_to_snooze_registry(payload.instance_id)
+async def trigger_rollback(payload: dict):
+    """Triggered when user clicks 'Undo' or 'Resolve Now' on React dashboard."""
+    role_arn = payload.get("role_arn")
+    instance_id = payload.get("instance_id")
+    score = float(payload.get("score", 0))
+
+    if score >= 0.8:
+        # Score was critical (Auto-Remediated), Undo means RESTART/START
+        resp = aws_client.restart_instance(instance_id, role_arn)
+    else:
+        # Score was warning (Manual), Resolve means STOP
+        resp = aws_client.stop_instance(instance_id, role_arn)
+
+    snooze_resp = aws_client.add_to_snooze_registry(instance_id)
 
     return {
-        "rollback_status": "executed",
-        "restart": restart_resp,
+        "status": "executed",
+        "aws_response": resp,
         "snooze": snooze_resp
     }
 
