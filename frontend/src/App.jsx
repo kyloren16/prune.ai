@@ -195,7 +195,7 @@ function DashboardPage({ score, status, narrative, logs, authSession, handleRoll
               <Brain size={18} color={PURPLE} />
               <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>AI Analyst — Root Cause Report</span>
             </div>
-            {score >= 0.8 && (
+            {score >= 0.8 ? (
               <button onClick={handleRollback} style={{
                 display: 'flex', alignItems: 'center', gap: '0.4rem',
                 padding: '0.4rem 0.9rem', borderRadius: 8, fontSize: '0.75rem',
@@ -204,7 +204,16 @@ function DashboardPage({ score, status, narrative, logs, authSession, handleRoll
               }}>
                 <RotateCcw size={13} /> Undo Remediation
               </button>
-            )}
+            ) : score >= 0.6 ? (
+              <button onClick={handleRollback} style={{
+                display: 'flex', alignItems: 'center', gap: '0.4rem',
+                padding: '0.4rem 0.9rem', borderRadius: 8, fontSize: '0.75rem',
+                background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.25)',
+                color: ORANGE, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600
+              }}>
+                <Zap size={13} /> Resolve Now
+              </button>
+            ) : null}
           </div>
 
           {narrative ? (
