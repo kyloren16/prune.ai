@@ -1,74 +1,149 @@
 import os
-import json
 import random
-import urllib.request
+import psycopg2
+import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
+from sklearn.ensemble import IsolationForest
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from datetime import datetime
+from mock_data import get_mock_cloudwatch_vitals, get_mock_cost_explorer_spend
 
-# Standard Mock Data Generation (No external deps)
-def get_mock_cloudwatch_vitals(instance_id, anomaly=False):
-    if anomaly:
-        return {
-            "instance_id": instance_id,
-            "cpu_usage_percent": random.uniform(85.0, 98.0),
-            "memory_usage_percent": random.uniform(70.0, 90.0),
-            "network_in_bytes": random.randint(500000000, 1000000000)
-        }
-    return {
-        "instance_id": instance_id,
-        "cpu_usage_percent": random.uniform(10.0, 30.0),
-        "memory_usage_percent": random.uniform(20.0, 40.0),
-        "network_in_bytes": random.randint(1000000, 10000000)
-    }
+# Load .env variables (e.g. TIMESCALEDB_URL and GEMINI_API_KEY)
+load_dotenv()
 
-def get_mock_cost_explorer_spend():
-    return {"hourly_spend": random.uniform(0.10, 5.0)}
+def generate_historical_baseline():
+    """Generates 100 data points of normal historical baseline for the ML models to fit onto."""
+    history = []
+    for _ in range(100):
+        history.append({
+            "cpu": random.uniform(10.0, 30.0),
+            "spend": random.uniform(0.40, 0.60),
+            "network": random.randint(1000000, 50000000)
+        })
+    return pd.DataFrame(history)
 
-def calculate_suspicion_score(vitals, spend):
-    """Simple weighted logic (No ML deps) for stable demo."""
-    cpu = vitals['cpu_usage_percent']
-    spend_val = spend['hourly_spend']
+def isolation_forest_score(current_cpu, history_df):
+    """Uses sklearn IsolationForest to score CPU anomalies. Returns normalized score [0, 1]."""
+    clf = IsolationForest(contamination=0.05, random_state=42)
+    # Fit historical CPU baseline
+    clf.fit(history_df[['cpu']])
     
-    # Simple threshold-based score
-    s1 = 0.95 if cpu > 80 else (cpu / 100)
-    s2 = 0.90 if spend_val > 3.0 else (spend_val / 5.0)
+    # Predict current CPU (-1 for anomaly, 1 for normal)
+    # decision_function returns negative values for outliers
+    score = clf.decision_function([[current_cpu]])[0]
     
-    final_score = (s1 * 0.6) + (s2 * 0.4)
+    # If the decision_function is negative, it's flagged as an outlier
+    if score < 0:
+        return 0.95 # Definite anomaly detected by Isolation Forest
+    return max(0.0, min(1.0, 0.1 + random.uniform(0, 0.1)))
+
+def holt_winters_score(current_spend, history_df):
+    """Uses statsmodels Holt-Winters to forecast and score spend anomalies."""
+    # We use simple exponential smoothing assuming no seasonality in our mock
+    model = ExponentialSmoothing(history_df['spend'], trend=None, seasonal=None, initialization_method="estimated").fit()
+    forecast = model.forecast(1).iloc[0]
+    
+    # Calculate deviation ratio
+    deviation = current_spend / forecast
+    if deviation > 3.0: # e.g., Spend is 3x what was forecast
+        return 0.85 
+    return min(1.0, deviation * 0.1)
+
+def z_score(current_network, history_df):
+    """Calculates Z-Score manually using scipy/numpy concepts ((val - mean) / std)."""
+    mean = history_df['network'].mean()
+    std = history_df['network'].std()
+    
+    z = (current_network - mean) / (std if std > 0 else 1)
+    
+    if z > 3.0: # 3 standard deviations away from the historical mean
+        return 0.90
+    return min(1.0, abs(z) * 0.1)
+
+def calculate_suspicion_score(vitals, spend, history_df):
+    """Runs the data through the Triple-Signal models and fuses the result."""
+    s1 = isolation_forest_score(vitals['cpu_usage_percent'], history_df)
+    s2 = holt_winters_score(spend['hourly_spend'], history_df)
+    s3 = z_score(vitals['network_in_bytes'], history_df)
+    
+    print(f"[ML-SIGNALS] IF(CPU): {s1:.2f} | HW(Spend): {s2:.2f} | Z(Net): {s3:.2f}")
+    
+    # Mathematical fusion (simple weighted average for POC)
+    final_score = (s1 * 0.4) + (s2 * 0.4) + (s3 * 0.2)
     return float(round(final_score, 2))
 
-def publish_to_sns(bundle):
-    """Publishes to SNS (Boto3 is standard in Lambda)."""
+def save_to_timescaledb(conn, metric_bundle, score):
+    """Saves the bundle to the TimescaleDB if connection exists."""
+    if not conn:
+        print("[DB-MOCK] TimescaleDB not connected. Would have inserted:", metric_bundle, "Score:", score)
+        return
+    
     try:
-        import boto3
-        sns = boto3.client('sns', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
-        topic_arn = os.environ.get('SNS_TOPIC_ARN')
-        if topic_arn:
-            sns.publish(TopicArn=topic_arn, Message=json.dumps(bundle))
-            print(f"[SNS-PUBLISH] Success: {bundle['suspicion_score']}")
+        cursor = conn.cursor()
+        query = """
+            INSERT INTO metrics_history (time, instance_id, cpu_usage_percent, memory_usage_percent, network_in_bytes, hourly_spend, suspicion_score, is_anomaly)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        is_anomaly = bool(score >= 0.60)
+        cursor.execute(query, (
+            datetime.utcnow(),
+            metric_bundle['instance_id'],
+            metric_bundle['cpu_usage_percent'],
+            metric_bundle['memory_usage_percent'],
+            metric_bundle['network_in_bytes'],
+            metric_bundle['hourly_spend'],
+            score,
+            is_anomaly
+        ))
+        conn.commit()
+        cursor.close()
+        print(f"[DB-SAVE] Success - metrics (Score: {score}) written to Hosted TimescaleDB.")
     except Exception as e:
-        print(f"[SNS-ERROR] Failed: {e}")
+        print(f"[DB-ERROR] Failed to write to DB: {e}")
+
+def publish_to_sns(bundle):
+    """Mocks sending a message to the SNS Topic."""
+    print(f"\n[SNS-PUBLISH] [ALERT] Anomaly Event Published! Payload: {bundle}\n")
 
 def lambda_handler(event, context):
-    print("[DETECTOR] Initializing Triple-Signal Ingestion...")
-    instance_id = "i-0abcd1234efgh5678"
+    """AWS Lambda entry point for the Detector."""
     
-    # Simulating anomaly for demo
-    vitals = get_mock_cloudwatch_vitals(instance_id, anomaly=True)
+    # Connect to TimescaleDB
+    db_conn = None
+    try:
+        timescale_url = os.environ.get("TIMESCALEDB_URL")
+        if timescale_url:
+             db_conn = psycopg2.connect(timescale_url)
+    except Exception as e:
+        print(f"Warning: TimescaleDB Connection failed. Operating in Mock DB Mode. Error: {e}")
+
+    # 1. Ingestion Stage
+    instance_id = "i-1234567890abcdef0"
+    vitals = get_mock_cloudwatch_vitals(instance_id, anomaly=True) # Forcing an anomaly for testing
     spend = get_mock_cost_explorer_spend()
+    history_df = generate_historical_baseline() # Mocking the last 24h baseline query
     
-    score = calculate_suspicion_score(vitals, spend)
-    print(f"[ANALYSIS] Instance: {instance_id} | Score: {score}")
+    # 2. Analysis Stage
+    score = calculate_suspicion_score(vitals, spend, history_df)
+    print(f"[{datetime.utcnow().isoformat()}] instance: {instance_id} | Final Suspicion Score: {score}")
     
+    metric_bundle = {**vitals, **spend}
+    save_to_timescaledb(db_conn, metric_bundle, score)
+
+    # Output to trigger Narrative Stage
     if score >= 0.60:
         event_payload = {
             "instance_id": instance_id,
             "suspicion_score": score,
-            "metrics": {**vitals, **spend},
-            "timestamp": datetime.utcnow().isoformat(),
-            "role_arn": os.environ.get("TARGET_ROLE_ARN", "arn:aws:iam::008533941157:role/PruneAI_CrossAccount_Role")
+            "metrics": metric_bundle,
+            "timestamp": datetime.utcnow().isoformat()
         }
         publish_to_sns(event_payload)
-    
-    return {"statusCode": 200, "score": score}
+        
+    if db_conn:
+        db_conn.close()
 
 if __name__ == '__main__':
-    lambda_handler({}, None)
+    # Local test execution
+    lambda_handler({}, {})
