@@ -74,6 +74,11 @@ resource "aws_iam_role_policy" "explainer_custom_policy" {
         Effect = "Allow"
         Action = ["ec2:StopInstances", "ec2:DescribeInstances", "ec2:CreateTags"]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = ["ses:SendEmail", "ses:SendRawEmail"]
+        Resource = "*"
       }
     ]
   })
